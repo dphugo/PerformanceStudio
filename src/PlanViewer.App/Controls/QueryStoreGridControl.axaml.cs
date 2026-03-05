@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
@@ -162,8 +163,9 @@ public partial class QueryStoreGridControl : UserControl
     {
         var icon = new TextBlock
         {
-            Text = "▼",
-            FontSize = 9,
+            Text = "\uE71C",
+            FontFamily = new Avalonia.Media.FontFamily("Segoe Fluent Icons,Segoe MDL2 Assets"),
+            FontSize = 12,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
         };
@@ -171,8 +173,8 @@ public partial class QueryStoreGridControl : UserControl
         {
             Content = icon,
             Tag = columnId,
-            Width = 14,
-            Height = 14,
+            Width = 16,
+            Height = 16,
             Padding = new Avalonia.Thickness(0),
             Background = Brushes.Transparent,
             BorderThickness = new Avalonia.Thickness(0),
@@ -189,7 +191,11 @@ public partial class QueryStoreGridControl : UserControl
             Margin = new Avalonia.Thickness(4, 0, 0, 0),
         };
 
-        var header = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal };
+        var header = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+        };
         header.Children.Add(btn);
         header.Children.Add(text);
         col.Header = header;
@@ -247,6 +253,7 @@ public partial class QueryStoreGridControl : UserControl
             if (btn.Content is not TextBlock tb) continue;
 
             bool hasFilter = _activeFilters.TryGetValue(colId, out var f) && f.IsActive;
+            tb.Text = hasFilter ? "\uE16E" : "\uE71C";
             if (hasFilter)
                 tb.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD7, 0x00));
             else
