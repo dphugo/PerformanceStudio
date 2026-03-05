@@ -163,8 +163,7 @@ public partial class QueryStoreGridControl : UserControl
     {
         var icon = new TextBlock
         {
-            Text = "\uE71C",
-            FontFamily = new Avalonia.Media.FontFamily("Segoe Fluent Icons,Segoe MDL2 Assets"),
+            Text = "▽",
             FontSize = 12,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
@@ -253,7 +252,7 @@ public partial class QueryStoreGridControl : UserControl
             if (btn.Content is not TextBlock tb) continue;
 
             bool hasFilter = _activeFilters.TryGetValue(colId, out var f) && f.IsActive;
-            tb.Text = hasFilter ? "\uE16E" : "\uE71C";
+            tb.Text = hasFilter ? "▼" : "▽";
             if (hasFilter)
                 tb.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD7, 0x00));
             else
