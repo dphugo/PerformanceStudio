@@ -99,7 +99,7 @@ public partial class QueryStoreGridControl : UserControl
 
     private void LoadSelected_Click(object? sender, RoutedEventArgs e)
     {
-        var selected = _rows.Where(r => r.IsSelected).Select(r => r.Plan).ToList();
+        var selected = _filteredRows.Where(r => r.IsSelected).Select(r => r.Plan).ToList();
         if (selected.Count > 0)
             PlansSelected?.Invoke(this, selected);
     }
