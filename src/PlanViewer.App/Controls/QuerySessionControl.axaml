@@ -31,10 +31,6 @@
                             Height="28" Padding="10,0" FontSize="12" IsEnabled="False"
                             Theme="{StaticResource AppButton}"
                             ToolTip.Tip="Capture estimated plan without executing (Ctrl+L)"/>
-                    <Button x:Name="CancelButton" Content="&#x25A0; Cancel" Click="Cancel_Click"
-                            Height="28" Padding="10,0" FontSize="12" IsVisible="False"
-                            Theme="{StaticResource AppButton}"
-                            ToolTip.Tip="Cancel running query (Escape)"/>
                     <TextBlock Text="|" VerticalAlignment="Center"
                                Foreground="{DynamicResource ForegroundBrush}" Margin="4,0"/>
                     <Button x:Name="HumanAdviceButton" Content="&#x1F9D1; Advice for Humans"
