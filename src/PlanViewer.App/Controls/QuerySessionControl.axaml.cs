@@ -154,6 +154,12 @@ public partial class QuerySessionControl : UserControl
             ExecuteEstimated_Click(this, new RoutedEventArgs());
             e.Handled = true;
         }
+        // Escape → Cancel running query
+        else if (e.Key == Key.Escape && CancelButton.IsVisible)
+        {
+            _executionCts?.Cancel();
+            e.Handled = true;
+        }
     }
 
     private void OnEditorPointerWheel(object? sender, PointerWheelEventArgs e)
@@ -452,6 +458,7 @@ public partial class QuerySessionControl : UserControl
         SetStatus($"Capturing {planType} plan...");
         ExecuteButton.IsEnabled = false;
         ExecuteEstButton.IsEnabled = false;
+        CancelButton.IsVisible = true;
 
         try
         {
@@ -505,7 +512,13 @@ public partial class QuerySessionControl : UserControl
         {
             ExecuteButton.IsEnabled = true;
             ExecuteEstButton.IsEnabled = true;
+            CancelButton.IsVisible = false;
         }
+    }
+
+    private void Cancel_Click(object? sender, RoutedEventArgs e)
+    {
+        _executionCts?.Cancel();
     }
 
     private AnalysisResult? GetCurrentAnalysis()
