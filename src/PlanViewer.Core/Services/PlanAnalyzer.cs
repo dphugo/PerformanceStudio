@@ -861,7 +861,11 @@ public static class PlanAnalyzer
         }
 
         // Rule 26: Row Goal (informational) — optimizer reduced estimate due to TOP/EXISTS/IN
-        if (!cfg.IsRuleDisabled(26) && node.EstimateRowsWithoutRowGoal > 0 && node.EstimateRows > 0 &&
+        // Only surface on data access operators (seeks/scans) where the row goal actually matters
+        var isDataAccess = node.PhysicalOp != null &&
+            (node.PhysicalOp.Contains("Scan") || node.PhysicalOp.Contains("Seek"));
+        if (!cfg.IsRuleDisabled(26) && isDataAccess &&
+            node.EstimateRowsWithoutRowGoal > 0 && node.EstimateRows > 0 &&
             node.EstimateRowsWithoutRowGoal > node.EstimateRows)
         {
             var reduction = node.EstimateRowsWithoutRowGoal / node.EstimateRows;
