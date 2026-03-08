@@ -1863,18 +1863,46 @@ public partial class PlanViewerControl : UserControl
         if (warnings != null && warnings.Count > 0)
         {
             stack.Children.Add(new Separator { Margin = new Thickness(0, 6, 0, 6) });
-            foreach (var w in warnings)
+
+            if (allWarnings != null)
             {
-                var warnColor = w.Severity == PlanWarningSeverity.Critical ? "#E57373"
-                    : w.Severity == PlanWarningSeverity.Warning ? "#FFB347" : "#6BB5FF";
-                stack.Children.Add(new TextBlock
+                // Root node: show distinct warning type names only
+                var distinct = warnings
+                    .GroupBy(w => w.WarningType)
+                    .Select(g => (Type: g.Key, MaxSeverity: g.Max(w => w.Severity), Count: g.Count()))
+                    .OrderByDescending(g => g.MaxSeverity)
+                    .ThenBy(g => g.Type);
+
+                foreach (var (type, severity, count) in distinct)
                 {
-                    Text = $"\u26A0 {w.WarningType}: {w.Message}",
-                    Foreground = new SolidColorBrush(Color.Parse(warnColor)),
-                    FontSize = 11,
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 2, 0, 0)
-                });
+                    var warnColor = severity == PlanWarningSeverity.Critical ? "#E57373"
+                        : severity == PlanWarningSeverity.Warning ? "#FFB347" : "#6BB5FF";
+                    var label = count > 1 ? $"\u26A0 {type} ({count})" : $"\u26A0 {type}";
+                    stack.Children.Add(new TextBlock
+                    {
+                        Text = label,
+                        Foreground = new SolidColorBrush(Color.Parse(warnColor)),
+                        FontSize = 11,
+                        Margin = new Thickness(0, 2, 0, 0)
+                    });
+                }
+            }
+            else
+            {
+                // Individual node: show full warning messages
+                foreach (var w in warnings)
+                {
+                    var warnColor = w.Severity == PlanWarningSeverity.Critical ? "#E57373"
+                        : w.Severity == PlanWarningSeverity.Warning ? "#FFB347" : "#6BB5FF";
+                    stack.Children.Add(new TextBlock
+                    {
+                        Text = $"\u26A0 {w.WarningType}: {w.Message}",
+                        Foreground = new SolidColorBrush(Color.Parse(warnColor)),
+                        FontSize = 11,
+                        TextWrapping = TextWrapping.Wrap,
+                        Margin = new Thickness(0, 2, 0, 0)
+                    });
+                }
             }
         }
 
