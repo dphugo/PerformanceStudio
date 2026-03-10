@@ -87,6 +87,14 @@ Pre-built binaries are available on the [Releases](https://github.com/erikdarlin
 
 These are self-contained — no .NET SDK required. Extract the zip and run.
 
+**macOS note:** macOS may block the app because it isn't signed with an Apple Developer certificate. If you see a warning that the app "can't be opened," run this after extracting:
+
+```bash
+xattr -cr PerformanceStudio.app
+```
+
+Then open the app normally.
+
 ## Build from Source
 
 Clone and build:
