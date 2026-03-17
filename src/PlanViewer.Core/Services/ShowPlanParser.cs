@@ -20,8 +20,9 @@ public static class ShowPlanParser
         {
             doc = XDocument.Parse(xml);
         }
-        catch
+        catch (Exception ex)
         {
+            plan.ParseError = ex.Message;
             return plan;
         }
 
@@ -409,7 +410,7 @@ public static class ShowPlanParser
         stmt.CachedPlanSizeKB = ParseLong(queryPlanEl.Attribute("CachedPlanSize")?.Value);
         stmt.DegreeOfParallelism = (int)ParseDouble(queryPlanEl.Attribute("DegreeOfParallelism")?.Value);
         stmt.NonParallelPlanReason = queryPlanEl.Attribute("NonParallelPlanReason")?.Value;
-        stmt.RetrievedFromCache = queryPlanEl.Attribute("RetrievedFromCache")?.Value is "true" or "1";
+        stmt.RetrievedFromCache = stmtEl.Attribute("RetrievedFromCache")?.Value is "true" or "1";
         stmt.CompileTimeMs = ParseLong(queryPlanEl.Attribute("CompileTime")?.Value);
         stmt.CompileMemoryKB = ParseLong(queryPlanEl.Attribute("CompileMemory")?.Value);
         stmt.CompileCPUMs = ParseLong(queryPlanEl.Attribute("CompileCPU")?.Value);

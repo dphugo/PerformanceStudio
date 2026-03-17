@@ -10,15 +10,20 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Microsoft.Data.SqlClient;
+using PlanViewer.Core.Interfaces;
 using PlanViewer.Core.Models;
+using PlanViewer.App.Dialogs;
 using PlanViewer.Core.Services;
 
 namespace PlanViewer.App.Controls;
 
 public partial class QueryStoreGridControl : UserControl
 {
-    private readonly string _connectionString;
-    private readonly string _database;
+    private readonly ServerConnection _serverConnection;
+    private readonly ICredentialService _credentialService;
+    private string _connectionString;
+    private string _database;
     private CancellationTokenSource? _fetchCts;
     private ObservableCollection<QueryStoreRow> _rows = new();
     private ObservableCollection<QueryStoreRow> _filteredRows = new();
@@ -27,26 +32,77 @@ public partial class QueryStoreGridControl : UserControl
     private ColumnFilterPopup? _filterPopupContent;
 
     public event EventHandler<List<QueryStorePlan>>? PlansSelected;
+    public event EventHandler<string>? DatabaseChanged;
 
-    public QueryStoreGridControl(string connectionString, string database)
+    public string Database => _database;
+
+    public QueryStoreGridControl(ServerConnection serverConnection, ICredentialService credentialService,
+        string initialDatabase, List<string> databases)
     {
-        _connectionString = connectionString;
-        _database = database;
+        _serverConnection = serverConnection;
+        _credentialService = credentialService;
+        _database = initialDatabase;
+        _connectionString = serverConnection.GetConnectionString(credentialService, initialDatabase);
         InitializeComponent();
         ResultsGrid.ItemsSource = _filteredRows;
         EnsureFilterPopup();
         SetupColumnHeaders();
+        PopulateDatabaseBox(databases, initialDatabase);
+    }
+
+    private void PopulateDatabaseBox(List<string> databases, string selectedDatabase)
+    {
+        QsDatabaseBox.ItemsSource = databases;
+        QsDatabaseBox.SelectedItem = selectedDatabase;
+    }
+
+    private async void QsDatabase_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (QsDatabaseBox.SelectedItem is not string db || db == _database) return;
+
+        _fetchCts?.Cancel();
+
+        // Check if Query Store is enabled on the new database
+        var newConnStr = _serverConnection.GetConnectionString(_credentialService, db);
+        StatusText.Text = "Checking Query Store...";
+
+        try
+        {
+            var (enabled, state) = await QueryStoreService.CheckEnabledAsync(newConnStr);
+            if (!enabled)
+            {
+                StatusText.Text = $"Query Store not enabled on {db} ({state ?? "unknown"})";
+                QsDatabaseBox.SelectedItem = _database; // revert
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = ex.Message.Length > 60 ? ex.Message[..60] + "..." : ex.Message;
+            QsDatabaseBox.SelectedItem = _database; // revert
+            return;
+        }
+
+        _database = db;
+        _connectionString = newConnStr;
+        _rows.Clear();
+        _filteredRows.Clear();
+        LoadButton.IsEnabled = false;
+        StatusText.Text = "";
+        DatabaseChanged?.Invoke(this, db);
     }
 
     private async void Fetch_Click(object? sender, RoutedEventArgs e)
     {
         _fetchCts?.Cancel();
+        _fetchCts?.Dispose();
         _fetchCts = new CancellationTokenSource();
         var ct = _fetchCts.Token;
 
         var topN = (int)(TopNBox.Value ?? 25);
         var hoursBack = (int)(HoursBackBox.Value ?? 24);
         var orderBy = (OrderByBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "cpu";
+        var filter = BuildSearchFilter();
 
         FetchButton.IsEnabled = false;
         LoadButton.IsEnabled = false;
@@ -57,7 +113,7 @@ public partial class QueryStoreGridControl : UserControl
         try
         {
             var plans = await QueryStoreService.FetchTopPlansAsync(
-                _connectionString, topN, orderBy, hoursBack, ct);
+                _connectionString, topN, orderBy, hoursBack, filter, ct);
 
             if (plans.Count == 0)
             {
@@ -70,6 +126,7 @@ public partial class QueryStoreGridControl : UserControl
 
             ApplyFilters();
             LoadButton.IsEnabled = true;
+            SelectToggleButton.Content = "Select None";
         }
         catch (OperationCanceledException)
         {
@@ -85,16 +142,68 @@ public partial class QueryStoreGridControl : UserControl
         }
     }
 
-    private void SelectAll_Click(object? sender, RoutedEventArgs e)
+    private QueryStoreFilter? BuildSearchFilter()
     {
-        foreach (var row in _filteredRows)
-            row.IsSelected = true;
+        var searchType = (SearchTypeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+        var searchValue = SearchValueBox.Text?.Trim();
+
+        if (string.IsNullOrEmpty(searchType) || string.IsNullOrEmpty(searchValue))
+            return null;
+
+        var filter = new QueryStoreFilter();
+
+        switch (searchType)
+        {
+            case "query-id" when long.TryParse(searchValue, out var qid):
+                filter.QueryId = qid;
+                break;
+            case "query-id":
+                StatusText.Text = "Invalid Query ID";
+                return null;
+            case "plan-id" when long.TryParse(searchValue, out var pid):
+                filter.PlanId = pid;
+                break;
+            case "plan-id":
+                StatusText.Text = "Invalid Plan ID";
+                return null;
+            case "query-hash":
+                filter.QueryHash = searchValue;
+                break;
+            case "plan-hash":
+                filter.QueryPlanHash = searchValue;
+                break;
+            case "module":
+                // Default to dbo schema if no schema specified, following sp_QuickieStore pattern
+                filter.ModuleName = searchValue.Contains('.') ? searchValue : $"dbo.{searchValue}";
+                break;
+            default:
+                return null;
+        }
+
+        return filter;
     }
 
-    private void SelectNone_Click(object? sender, RoutedEventArgs e)
+    private void SearchValue_KeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
     {
+        if (e.Key == Avalonia.Input.Key.Enter)
+        {
+            Fetch_Click(sender, e);
+            e.Handled = true;
+        }
+    }
+
+    private void ClearSearch_Click(object? sender, RoutedEventArgs e)
+    {
+        SearchTypeBox.SelectedIndex = 0;
+        SearchValueBox.Text = "";
+    }
+
+    private void SelectToggle_Click(object? sender, RoutedEventArgs e)
+    {
+        var allSelected = _filteredRows.Count > 0 && _filteredRows.All(r => r.IsSelected);
         foreach (var row in _filteredRows)
-            row.IsSelected = false;
+            row.IsSelected = !allSelected;
+        SelectToggleButton.Content = allSelected ? "Select All" : "Select None";
     }
 
     private void LoadSelected_Click(object? sender, RoutedEventArgs e)
@@ -110,12 +219,92 @@ public partial class QueryStoreGridControl : UserControl
             PlansSelected?.Invoke(this, new List<QueryStorePlan> { row.Plan });
     }
 
+    private async void ViewHistory_Click(object? sender, RoutedEventArgs e)
+    {
+        if (ResultsGrid.SelectedItem is not QueryStoreRow row) return;
+
+        var hoursBack = (int)(HoursBackBox.Value ?? 24);
+
+        var window = new QueryStoreHistoryWindow(
+            _connectionString,
+            row.QueryId,
+            row.FullQueryText,
+            _database,
+            hoursBack);
+
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        if (topLevel is Window parentWindow)
+            await window.ShowDialog(parentWindow);
+        else
+            window.Show();
+    }
+
+    // ── Context menu ────────────────────────────────────────────────────────
+
+    private void ContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        var row = ResultsGrid.SelectedItem as QueryStoreRow;
+        var hasRow = row != null;
+
+        ViewHistoryItem.IsEnabled = hasRow;
+        CopyQueryIdItem.IsEnabled = hasRow;
+        CopyPlanIdItem.IsEnabled = hasRow;
+        CopyQueryHashItem.IsEnabled = hasRow && !string.IsNullOrEmpty(row!.QueryHash);
+        CopyPlanHashItem.IsEnabled = hasRow && !string.IsNullOrEmpty(row!.QueryPlanHash);
+        CopyModuleItem.IsEnabled = hasRow && !string.IsNullOrEmpty(row!.ModuleName);
+        CopyQueryTextItem.IsEnabled = hasRow;
+        CopyRowItem.IsEnabled = hasRow;
+
+        // Wire click handlers (clear first to avoid stacking)
+        CopyQueryIdItem.Click -= CopyMenuItem_Click;
+        CopyPlanIdItem.Click -= CopyMenuItem_Click;
+        CopyQueryHashItem.Click -= CopyMenuItem_Click;
+        CopyPlanHashItem.Click -= CopyMenuItem_Click;
+        CopyModuleItem.Click -= CopyMenuItem_Click;
+        CopyQueryTextItem.Click -= CopyMenuItem_Click;
+        CopyRowItem.Click -= CopyMenuItem_Click;
+
+        if (!hasRow) return;
+
+        CopyQueryIdItem.Tag = row!.QueryId.ToString();
+        CopyPlanIdItem.Tag = row.PlanId.ToString();
+        CopyQueryHashItem.Tag = row.QueryHash;
+        CopyPlanHashItem.Tag = row.QueryPlanHash;
+        CopyModuleItem.Tag = row.ModuleName;
+        CopyQueryTextItem.Tag = row.FullQueryText;
+        CopyRowItem.Tag = $"{row.QueryId}\t{row.PlanId}\t{row.QueryHash}\t{row.QueryPlanHash}\t{row.ModuleName}\t{row.LastExecutedLocal}\t{row.ExecsDisplay}\t{row.TotalCpuDisplay}\t{row.AvgCpuDisplay}\t{row.TotalDurDisplay}\t{row.AvgDurDisplay}\t{row.TotalReadsDisplay}\t{row.AvgReadsDisplay}\t{row.TotalWritesDisplay}\t{row.AvgWritesDisplay}\t{row.TotalPhysReadsDisplay}\t{row.AvgPhysReadsDisplay}\t{row.TotalMemDisplay}\t{row.AvgMemDisplay}\t{row.FullQueryText}";
+
+        CopyQueryIdItem.Click += CopyMenuItem_Click;
+        CopyPlanIdItem.Click += CopyMenuItem_Click;
+        CopyQueryHashItem.Click += CopyMenuItem_Click;
+        CopyPlanHashItem.Click += CopyMenuItem_Click;
+        CopyModuleItem.Click += CopyMenuItem_Click;
+        CopyQueryTextItem.Click += CopyMenuItem_Click;
+        CopyRowItem.Click += CopyMenuItem_Click;
+    }
+
+    private async void CopyMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem item && item.Tag is string text)
+            await SetClipboardTextAsync(text);
+    }
+
+    private async System.Threading.Tasks.Task SetClipboardTextAsync(string text)
+    {
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        if (topLevel?.Clipboard != null)
+            await topLevel.Clipboard.SetTextAsync(text);
+    }
+
     // ── Column filter infrastructure ───────────────────────────────────────
 
     private static readonly Dictionary<string, Func<QueryStoreRow, string>> TextAccessors = new()
     {
-        ["LastExecuted"] = r => r.LastExecutedLocal,
-        ["QueryText"]    = r => r.FullQueryText,
+        ["QueryHash"]     = r => r.QueryHash,
+        ["PlanHash"]      = r => r.QueryPlanHash,
+        ["ModuleName"]    = r => r.ModuleName,
+        ["LastExecuted"]  = r => r.LastExecutedLocal,
+        ["QueryText"]     = r => r.FullQueryText,
     };
 
     private static readonly Dictionary<string, Func<QueryStoreRow, double>> NumericAccessors = new()
@@ -142,21 +331,24 @@ public partial class QueryStoreGridControl : UserControl
         var cols = ResultsGrid.Columns;
         SetColumnFilterButton(cols[1],  "QueryId",        "Query ID");
         SetColumnFilterButton(cols[2],  "PlanId",         "Plan ID");
-        SetColumnFilterButton(cols[3],  "LastExecuted",   "Last Executed (Local)");
-        SetColumnFilterButton(cols[4],  "Executions",     "Executions");
-        SetColumnFilterButton(cols[5],  "TotalCpu",       "Total CPU (ms)");
-        SetColumnFilterButton(cols[6],  "AvgCpu",         "Avg CPU (ms)");
-        SetColumnFilterButton(cols[7],  "TotalDuration",  "Total Duration (ms)");
-        SetColumnFilterButton(cols[8],  "AvgDuration",    "Avg Duration (ms)");
-        SetColumnFilterButton(cols[9],  "TotalReads",     "Total Reads");
-        SetColumnFilterButton(cols[10], "AvgReads",       "Avg Reads");
-        SetColumnFilterButton(cols[11], "TotalWrites",    "Total Writes");
-        SetColumnFilterButton(cols[12], "AvgWrites",      "Avg Writes");
-        SetColumnFilterButton(cols[13], "TotalPhysReads", "Total Physical Reads");
-        SetColumnFilterButton(cols[14], "AvgPhysReads",   "Avg Physical Reads");
-        SetColumnFilterButton(cols[15], "TotalMemory",    "Total Memory (MB)");
-        SetColumnFilterButton(cols[16], "AvgMemory",      "Avg Memory (MB)");
-        SetColumnFilterButton(cols[17], "QueryText",      "Query Text");
+        SetColumnFilterButton(cols[3],  "QueryHash",      "Query Hash");
+        SetColumnFilterButton(cols[4],  "PlanHash",       "Plan Hash");
+        SetColumnFilterButton(cols[5],  "ModuleName",     "Module");
+        SetColumnFilterButton(cols[6],  "LastExecuted",   "Last Executed (Local)");
+        SetColumnFilterButton(cols[7],  "Executions",     "Executions");
+        SetColumnFilterButton(cols[8],  "TotalCpu",       "Total CPU (ms)");
+        SetColumnFilterButton(cols[9],  "AvgCpu",         "Avg CPU (ms)");
+        SetColumnFilterButton(cols[10], "TotalDuration",  "Total Duration (ms)");
+        SetColumnFilterButton(cols[11], "AvgDuration",    "Avg Duration (ms)");
+        SetColumnFilterButton(cols[12], "TotalReads",     "Total Reads");
+        SetColumnFilterButton(cols[13], "AvgReads",       "Avg Reads");
+        SetColumnFilterButton(cols[14], "TotalWrites",    "Total Writes");
+        SetColumnFilterButton(cols[15], "AvgWrites",      "Avg Writes");
+        SetColumnFilterButton(cols[16], "TotalPhysReads", "Total Physical Reads");
+        SetColumnFilterButton(cols[17], "AvgPhysReads",   "Avg Physical Reads");
+        SetColumnFilterButton(cols[18], "TotalMemory",    "Total Memory (MB)");
+        SetColumnFilterButton(cols[19], "AvgMemory",      "Avg Memory (MB)");
+        SetColumnFilterButton(cols[20], "QueryText",      "Query Text");
     }
 
     private void SetColumnFilterButton(DataGridColumn col, string columnId, string label)
@@ -353,6 +545,9 @@ public class QueryStoreRow : INotifyPropertyChanged
 
     public long QueryId => Plan.QueryId;
     public long PlanId => Plan.PlanId;
+    public string QueryHash => Plan.QueryHash;
+    public string QueryPlanHash => Plan.QueryPlanHash;
+    public string ModuleName => Plan.ModuleName;
 
     public string ExecsDisplay => Plan.CountExecutions.ToString("N0");
     public string TotalCpuDisplay => (Plan.TotalCpuTimeUs / 1000.0).ToString("N0");

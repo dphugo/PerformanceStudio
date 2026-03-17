@@ -60,8 +60,8 @@ public partial class QuerySessionControl : UserControl
         // Keybindings: F5/Ctrl+E for Execute, Ctrl+L for Estimated Plan
         KeyDown += OnKeyDown;
 
-        // Ctrl+mousewheel for font zoom
-        QueryEditor.PointerWheelChanged += OnEditorPointerWheel;
+        // Ctrl+mousewheel for font zoom — use Tunnel so it fires before ScrollViewer consumes scroll-down
+        QueryEditor.AddHandler(Avalonia.Input.InputElement.PointerWheelChangedEvent, OnEditorPointerWheel, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
         // Code completion
         QueryEditor.TextArea.TextEntering += OnTextEntering;
@@ -73,6 +73,8 @@ public partial class QuerySessionControl : UserControl
             QueryEditor.Focus();
             QueryEditor.TextArea.Focus();
         };
+
+        DetachedFromVisualTree += (_, _) => _textMateInstallation?.Dispose();
 
         // Focus the editor when the Editor tab is selected; toggle plan-dependent buttons
         SubTabControl.SelectionChanged += (_, _) =>
@@ -320,6 +322,7 @@ public partial class QuerySessionControl : UserControl
     private void SetStatus(string text, bool autoClear = true)
     {
         _statusClearCts?.Cancel();
+        _statusClearCts?.Dispose();
         StatusText.Text = text;
 
         if (autoClear && !string.IsNullOrEmpty(text))
@@ -335,44 +338,7 @@ public partial class QuerySessionControl : UserControl
 
     private async void Connect_Click(object? sender, RoutedEventArgs e)
     {
-        var dialog = new ConnectionDialog(_credentialService, _connectionStore);
-        var result = await dialog.ShowDialog<bool?>(GetParentWindow());
-
-        if (result == true && dialog.ResultConnection != null)
-        {
-            _serverConnection = dialog.ResultConnection;
-            _selectedDatabase = dialog.ResultDatabase;
-            _connectionString = _serverConnection.GetConnectionString(_credentialService, _selectedDatabase);
-
-            ServerLabel.Text = _serverConnection.ServerName;
-            ServerLabel.Foreground = Brushes.LimeGreen;
-            ConnectButton.Content = "Reconnect";
-
-            // Populate database dropdown
-            await PopulateDatabases();
-
-            // Collect server metadata for advice output
-            await FetchServerMetadataAsync();
-
-            // Select the database chosen in the dialog
-            if (_selectedDatabase != null)
-            {
-                for (int i = 0; i < DatabaseBox.Items.Count; i++)
-                {
-                    if (DatabaseBox.Items[i]?.ToString() == _selectedDatabase)
-                    {
-                        DatabaseBox.SelectedIndex = i;
-                        break;
-                    }
-                }
-            }
-
-            // Collect database metadata for the initial database
-            await FetchDatabaseMetadataAsync();
-
-            ExecuteButton.IsEnabled = true;
-            ExecuteEstButton.IsEnabled = true;
-        }
+        await ShowConnectionDialogAsync();
     }
 
     private async Task ShowConnectionDialogAsync()
@@ -495,11 +461,15 @@ public partial class QuerySessionControl : UserControl
 
     private async Task CaptureAndShowPlan(bool estimated, string? queryTextOverride = null)
     {
-        if (_connectionString == null || _selectedDatabase == null)
+        if (_serverConnection == null || _selectedDatabase == null)
         {
             SetStatus("Connect to a server first", autoClear: false);
             return;
         }
+
+        // Always rebuild connection string from current database selection
+        // to guarantee the picker state is reflected at execution time
+        _connectionString = _serverConnection.GetConnectionString(_credentialService, _selectedDatabase);
 
         var queryText = queryTextOverride?.Trim()
                         ?? GetSelectedTextOrNull()?.Trim()
@@ -511,6 +481,7 @@ public partial class QuerySessionControl : UserControl
         }
 
         _executionCts?.Cancel();
+        _executionCts?.Dispose();
         _executionCts = new CancellationTokenSource();
         var ct = _executionCts.Token;
 
@@ -896,6 +867,8 @@ public partial class QuerySessionControl : UserControl
     {
         if (sender is Button btn && btn.Tag is TabItem tab)
         {
+            if (tab.Content is PlanViewerControl viewer)
+                viewer.Clear();
             SubTabControl.Items.Remove(tab);
             UpdateCompareButtonState();
         }
@@ -915,6 +888,8 @@ public partial class QuerySessionControl : UserControl
             case "Close":
                 if (item.Tag is TabItem tab)
                 {
+                    if (tab.Content is PlanViewerControl closeViewer)
+                        closeViewer.Clear();
                     SubTabControl.Items.Remove(tab);
                     UpdateCompareButtonState();
                 }
@@ -929,7 +904,11 @@ public partial class QuerySessionControl : UserControl
                         .Where(t => t != keepTab && t.Content is PlanViewerControl)
                         .ToList();
                     foreach (var t in others)
+                    {
+                        if (t.Content is PlanViewerControl otherViewer)
+                            otherViewer.Clear();
                         SubTabControl.Items.Remove(t);
+                    }
                     SubTabControl.SelectedItem = keepTab;
                     UpdateCompareButtonState();
                 }
@@ -941,7 +920,11 @@ public partial class QuerySessionControl : UserControl
                     .Where(t => t.Content is PlanViewerControl)
                     .ToList();
                 foreach (var t in planTabs)
+                {
+                    if (t.Content is PlanViewerControl allViewer)
+                        allViewer.Clear();
                     SubTabControl.Items.Remove(t);
+                }
                 SubTabControl.SelectedIndex = 0; // back to Editor
                 UpdateCompareButtonState();
                 break;
@@ -980,11 +963,17 @@ public partial class QuerySessionControl : UserControl
         return "Plan";
     }
 
+    private bool HasQueryStoreTab()
+    {
+        return SubTabControl.Items.OfType<TabItem>()
+            .Any(t => t.Content is QueryStoreGridControl);
+    }
+
     private async void QueryStore_Click(object? sender, RoutedEventArgs e)
     {
-        if (_connectionString == null || _selectedDatabase == null)
+        // If a QS tab already exists, always show connection dialog for a fresh tab
+        if (HasQueryStoreTab() || _connectionString == null || _selectedDatabase == null)
         {
-            // No connection — open the connection dialog and wait for it
             await ShowConnectionDialogAsync();
             if (_connectionString == null || _selectedDatabase == null)
                 return;
@@ -1009,7 +998,11 @@ public partial class QuerySessionControl : UserControl
 
         SetStatus("");
 
-        var grid = new QueryStoreGridControl(_connectionString, _selectedDatabase!);
+        // Build database list from the current DatabaseBox
+        var databases = DatabaseBox.Items.OfType<string>().ToList();
+
+        var grid = new QueryStoreGridControl(_serverConnection!, _credentialService,
+            _selectedDatabase!, databases);
         grid.PlansSelected += OnQueryStorePlansSelected;
 
         var headerText = new TextBlock
@@ -1017,6 +1010,12 @@ public partial class QuerySessionControl : UserControl
             Text = $"Query Store — {_selectedDatabase}",
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
             FontSize = 12
+        };
+
+        // Update tab header when database is changed via the grid's picker
+        grid.DatabaseChanged += (_, db) =>
+        {
+            headerText.Text = $"Query Store — {db}";
         };
 
         var closeBtn = new Button
@@ -1319,6 +1318,7 @@ public partial class QuerySessionControl : UserControl
         if (!confirmed) return;
 
         _executionCts?.Cancel();
+        _executionCts?.Dispose();
         _executionCts = new CancellationTokenSource();
         var ct = _executionCts.Token;
 
